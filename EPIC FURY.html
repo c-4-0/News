@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Israel-Iran Conflict: Animated Strike Map</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://unpkg.com/topojson-client@3"></script>
+    <style>
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background-color: #0f172a; /* Tailwind Slate-900 */
+            font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            color: #f8fafc;
+        }
+        #map { 
+            width: 100vw; 
+            height: 100vh; 
+            cursor: grab;
+        }
+        #map:active {
+            cursor: grabbing;
+        }
+        .blur-overlay { 
+            backdrop-filter: blur(12px); 
+            -webkit-backdrop-filter: blur(12px);
+        }
+        
+        /* Subtle glowing trails for missiles */
+        .strike-path {
+            filter: drop-shadow(0px 0px 3px currentColor);
+        }
+
+        /* Label legibility */
+        .city-label {
+            paint-order: stroke;
+            stroke: #0f172a;
+            stroke-width: 3px;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Loading Screen -->
+    <div id="loading" class="absolute inset-0 flex flex-col items-center justify-center bg-slate-900 z-50 transition-opacity duration-700">
+        <div class="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+        <div class="text-lg font-semibold text-slate-300 animate-pulse tracking-widest uppercase">Initializing Map Intelligence...</div>
+    </div>
+
+    <!-- Map Container -->
+    <div id="map"></div>
+
+    <!-- Map Zoom Controls -->
+    <div class="absolute top-6 right-6 pointer-events-auto flex flex-col gap-2 z-20 hidden md:flex">
+        <button onclick="zoomIn()" class="p-2.5 bg-slate-900/80 hover:bg-slate-800 text-slate-300 rounded-lg shadow-lg border border-slate-700/50 blur-overlay transition-colors focus:outline-none focus:ring-2 focus:ring-slate-500" title="Zoom In">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+        </button>
+        <button onclick="zoomOut()" class="p-2.5 bg-slate-900/80 hover:bg-slate-800 text-slate-300 rounded-lg shadow-lg border border-slate-700/50 blur-overlay transition-colors focus:outline-none focus:ring-2 focus:ring-slate-500" title="Zoom Out">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4"/></svg>
+        </button>
+        <button onclick="resetZoom()" class="p-2.5 bg-slate-900/80 hover:bg-slate-800 text-slate-300 rounded-lg shadow-lg border border-slate-700/50 blur-overlay transition-colors focus:outline-none focus:ring-2 focus:ring-slate-500" title="Reset View">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/></svg>
+        </button>
+    </div>
+
+    <!-- UI Overlay -->
+    <div class="absolute inset-0 pointer-events-none flex flex-col justify-between p-4 md:p-6 z-10">
+        
+        <!-- Header -->
+        <div class="pointer-events-auto max-w-lg bg-slate-900/80 blur-overlay p-5 md:p-6 rounded-2xl border border-slate-700/50 shadow-2xl mt-12 md:mt-0">
+            <h1 class="text-xl md:text-2xl font-bold text-white mb-2 tracking-tight">Israel-Iran Conflict Timeline</h1>
+            <p class="text-slate-400 text-xs md:text-sm">Animated mapping of direct military exchanges, retaliatory strikes, and the recent massive 2026 escalations. Origin and impact sites are visualized geographically.</p>
+        </div>
+        
+        <!-- Interactive Playback Panel -->
+        <div class="pointer-events-auto max-w-md bg-slate-900/85 blur-overlay p-5 md:p-6 rounded-2xl border border-slate-700/50 shadow-2xl mb-4 md:mb-8 ml-0 md:ml-4">
+            <div class="flex items-center gap-3 mb-2">
+                <span class="px-2.5 py-1 bg-blue-500/20 text-blue-400 text-xs font-bold rounded-md uppercase tracking-wider border border-blue-500/30" id="step-date">Date</span>
+                <span class="text-xs text-slate-500 font-mono" id="step-counter">1 / 2</span>
+            </div>
+            
+            <h2 class="text-lg md:text-xl font-bold text-white mb-2 leading-tight" id="step-title">Event Title</h2>
+            <p class="text-slate-300 text-sm mb-6 min-h-[60px]" id="step-desc">Event Description goes here...</p>
+            
+            <!-- Controls -->
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <button onclick="prevStep()" class="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-slate-500">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M15 19l-7-7 7-7"/></svg>
+                    </button>
+                    
+                    <button onclick="togglePlay()" id="play-btn" class="p-3.5 bg-blue-600 hover:bg-blue-500 text-white rounded-full transition-all transform hover:scale-105 shadow-lg shadow-blue-500/30 focus:outline-none focus:ring-2 focus:ring-blue-400">
+                        <!-- Play Icon -->
+                        <svg id="play-icon" xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                        <!-- Pause Icon -->
+                        <svg id="pause-icon" xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 hidden" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                    </button>
+                    
+                    <button onclick="nextStep()" class="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-slate-500">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/></svg>
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Progress bar -->
+            <div class="w-full bg-slate-800 h-1.5 mt-6 rounded-full overflow-hidden">
+                <div id="progress-bar" class="bg-blue-500 h-full transition-all duration-300 ease-out" style="width: 0%;"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Legend -->
+    <div class="absolute bottom-6 right-6 pointer-events-auto bg-slate-900/80 blur-overlay p-4 rounded-xl border border-slate-700/50 shadow-xl hidden md:block z-10">
+        <h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Strike Trajectories</h3>
+        <div class="flex flex-col gap-2.5">
+            <div class="flex items-center gap-3">
+                <div class="w-5 h-1 bg-[#38bdf8] rounded-full shadow-[0_0_5px_#38bdf8]"></div>
+                <span class="text-sm font-medium text-slate-200">US / Israeli Strikes</span>
+            </div>
+            <div class="flex items-center gap-3">
+                <div class="w-5 h-1 bg-[#f87171] rounded-full shadow-[0_0_5px_#f87171]"></div>
+                <span class="text-sm font-medium text-slate-200">Iranian Strikes</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- DATA TIMELINE ---
+        const events = [
+            {
+                date: "February 28, 2026",
+                title: "Operation Epic Fury",
+                desc: "US and Israel launch massive coordinated strikes on Iran targeting leadership, military, and nuclear sites across Tehran, Isfahan, Tabriz, and Qom.",
+                strikes: [
+                    { from: [34.78, 32.08], to: [51.38, 35.68], color: "#38bdf8" }, // Israel to Tehran
+                    { from: [51.31, 25.11], to: [51.66, 32.65], color: "#38bdf8" }, // US Qatar to Isfahan
+                    { from: [34.78, 32.08], to: [46.29, 38.09], color: "#38bdf8" }, // Israel to Tabriz
+                    { from: [50.58, 26.22], to: [50.87, 34.64], color: "#38bdf8" }  // US Bahrain to Qom
+                ]
+            },
+            {
+                date: "February 28, 2026",
+                title: "Iran's Regional Retaliation",
+                desc: "Iran immediately strikes back, launching ballistic missiles at Israel and targeting US military installations across the Gulf in Qatar, Kuwait, Bahrain, and the UAE.",
+                strikes: [
+                    { from: [51.38, 35.68], to: [34.78, 32.08], color: "#f87171" }, // Tehran to Israel
+                    { from: [52.53, 29.59], to: [51.31, 25.11], color: "#f87171" }, // Shiraz to Qatar
+                    { from: [47.06, 34.31], to: [47.52, 29.34], color: "#f87171" }, // Kermanshah to Kuwait
+                    { from: [56.28, 27.18], to: [54.36, 24.46], color: "#f87171" }, // Bandar Abbas to UAE
+                    { from: [51.66, 32.65], to: [50.58, 26.22], color: "#f87171" }  // Isfahan to Bahrain
+                ]
+            }
+        ];
+
+        // --- MAP SETUP ---
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        const isMobile = width < 768;
+
+        // Dynamic scaling based on window width to keep the Middle East centered
+        const baseScale = (width / 1000) * 1800;
+        const finalScale = Math.min(Math.max(baseScale, 800), 3500);
+
+        const projection = d3.geoMercator()
+            .center([46, 31.5]) // Center precisely between Israel and Iran
+            .scale(finalScale)
+            .translate([width / 2, height / 2]);
+
+        const pathGenerator = d3.geoPath().projection(projection);
+
+        const svg = d3.select("#map").append("svg")
+            .attr("width", width)
+            .attr("height", height);
+
+        const g = svg.append("g");
+
+        // Layers
+        const mapLayer = g.append("g").attr("id", "map-layer");
+        const countryLabelsLayer = g.append("g").attr("id", "country-labels-layer");
+        const strikesLayer = g.append("g").attr("id", "strikes-layer");
+        const citiesLayer = g.append("g").attr("id", "cities-layer");
+
+        // Zoom capability
+        const zoom = d3.zoom()
+            .scaleExtent([0.5, 8])
+            .on("zoom", (e) => {
+                g.attr("transform", e.transform);
+            });
+        svg.call(zoom);
+
+        // Zoom Control Functions
+        function zoomIn() {
+            svg.transition().duration(500).call(zoom.scaleBy, 1.5);
+        }
+
+        function zoomOut() {
+            svg.transition().duration(500).call(zoom.scaleBy, 0.667);
+        }
+
+        function resetZoom() {
+            svg.transition().duration(750).call(zoom.transform, d3.zoomIdentity);
+        }
+
+        // --- RENDER MAP ---
+        d3.json("https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json").then(world => {
+            const countries = topojson.feature(world, world.objects.countries).features;
+            
+            mapLayer.selectAll("path")
+                .data(countries)
+                .enter().append("path")
+                .attr("d", pathGenerator)
+                .attr("fill", d => {
+                    // Slight color tinting for key countries
+                    if(d.id === "364") return "#1e1515"; // Iran (Slight reddish dark)
+                    if(d.id === "376") return "#151c28"; // Israel (Slight bluish dark)
+                    return "#1e293b"; // Slate-800 default
+                })
+                .attr("stroke", "#334155") // Slate-700
+                .attr("stroke-width", 1);
+                
+            drawContext();
+            
+            // Hide loading screen
+            const loading = document.getElementById('loading');
+            loading.style.opacity = '0';
+            setTimeout(() => loading.style.display = 'none', 700);
+
+            // Initial render
+            renderStep(0);
+            updateProgress();
+            
+            // Auto start timeline
+            setTimeout(() => {
+                if(!isPlaying) togglePlay();
+            }, 1500);
+        });
+
+        // --- DRAW CITIES AND LABELS ---
+        function drawContext() {
+            const countryLabels = [
+                { name: "ISRAEL", coords: [34.8, 30.2] },
+                { name: "IRAN", coords: [53.0, 32.5] },
+                { name: "IRAQ", coords: [43.0, 33.0] },
+                { name: "SYRIA", coords: [38.5, 34.8] },
+                { name: "SAUDI ARABIA", coords: [44.0, 25.0] }
+            ];
+
+            countryLabels.forEach(label => {
+                const pos = projection(label.coords);
+                if(pos) {
+                    countryLabelsLayer.append("text")
+                        .attr("x", pos[0])
+                        .attr("y", pos[1])
+                        .attr("text-anchor", "middle")
+                        .attr("fill", "#475569") // Slate-600
+                        .attr("font-size", isMobile ? "12px" : "16px")
+                        .attr("font-weight", "800")
+                        .attr("letter-spacing", "4px")
+                        .attr("opacity", 0.6)
+                        .text(label.name);
+                }
+            });
+
+            // Every start/end coordinate used in the timeline events to ensure labels appear everywhere
+            const cities = [
+                { name: "Israel (Tel Aviv)", coords: [34.78, 32.08] },
+                { name: "Tehran", coords: [51.38, 35.68] },
+                { name: "Isfahan", coords: [51.66, 32.65] },
+                { name: "Shiraz", coords: [52.53, 29.59] },
+                { name: "Tabriz", coords: [46.29, 38.09] },
+                { name: "Qom", coords: [50.87, 34.64] },
+                { name: "Kermanshah", coords: [47.06, 34.31] },
+                { name: "Bandar Abbas", coords: [56.28, 27.18] },
+                { name: "US Base (Qatar)", coords: [51.31, 25.11] },
+                { name: "US Base (Bahrain)", coords: [50.58, 26.22] },
+                { name: "US Base (Kuwait)", coords: [47.52, 29.34] },
+                { name: "US Base (UAE)", coords: [54.36, 24.46] }
+            ];
+
+            cities.forEach(city => {
+                const pos = projection(city.coords);
+                if(pos) {
+                    // City dot
+                    citiesLayer.append("circle")
+                        .attr("cx", pos[0])
+                        .attr("cy", pos[1])
+                        .attr("r", 3.5)
+                        .attr("fill", "#cbd5e1"); // Slate-300
+                        
+                    // City label with text outline for legibility over strike lines
+                    citiesLayer.append("text")
+                        .attr("x", pos[0] + 8)
+                        .attr("y", pos[1] + 4)
+                        .attr("fill", "#f1f5f9") // Slate-100
+                        .attr("font-size", "11px")
+                        .attr("font-family", "sans-serif")
+                        .attr("font-weight", "600")
+                        .attr("class", "city-label")
+                        .text(city.name);
+                }
+            });
+        }
+
+        // --- TIMELINE LOGIC ---
+        let currentStep = 0;
+        let isPlaying = false;
+        let timer;
+        const stepDuration = 7000; // ms per timeline step
+
+        function renderStep(stepIndex) {
+            const step = events[stepIndex];
+            
+            // Update UI Texts
+            document.getElementById("step-date").innerText = step.date;
+            document.getElementById("step-title").innerText = step.title;
+            document.getElementById("step-desc").innerText = step.desc;
+            document.getElementById("step-counter").innerText = `${stepIndex + 1} / ${events.length}`;
+            
+            // Manage map history: REMOVE explosions, but KEEP the lines drawn
+            strikesLayer.selectAll("circle").transition().duration(800).attr("opacity", 0).remove();
+            
+            // If we loop back to the start, wipe the board clean to restart the visualization
+            if (stepIndex === 0) {
+                strikesLayer.selectAll("*").remove();
+            }
+
+            // Draw new strikes for this event
+            step.strikes.forEach((strike, i) => {
+                const from = projection(strike.from);
+                const to = projection(strike.to);
+                if(!from || !to) return; 
+                
+                const dx = to[0] - from[0];
+                const dy = to[1] - from[1];
+                
+                // Calculate Bezier control point to arc the flight path
+                const cx = from[0] + dx * 0.45 - dy * 0.25;
+                const cy = from[1] + dy * 0.45 + dx * 0.25;
+                
+                const pathData = `M${from[0]},${from[1]} Q${cx},${cy} ${to[0]},${to[1]}`;
+                
+                const path = strikesLayer.append("path")
+                    .attr("d", pathData)
+                    .attr("fill", "none")
+                    .attr("stroke", strike.color)
+                    .attr("stroke-width", 2.5)
+                    .attr("stroke-linecap", "round")
+                    .attr("class", "strike-path");
+                    
+                const totalLength = path.node().getTotalLength();
+                
+                // Add staggered delay to missiles so they don't all launch at exact same millisecond
+                const delay = i * 400;
+
+                path.attr("stroke-dasharray", totalLength + " " + totalLength)
+                    .attr("stroke-dashoffset", totalLength)
+                    .transition()
+                    .delay(delay)
+                    .duration(2500)
+                    .ease(d3.easeCubicOut)
+                    .attr("stroke-dashoffset", 0)
+                    .on("end", function() {
+                        
+                        // Impact Blast Ring
+                        strikesLayer.append("circle")
+                            .attr("cx", to[0])
+                            .attr("cy", to[1])
+                            .attr("r", 2)
+                            .attr("fill", "none")
+                            .attr("stroke", strike.color)
+                            .attr("stroke-width", 2)
+                            .attr("opacity", 1)
+                            .transition()
+                            .duration(1200)
+                            .ease(d3.easeCircleOut)
+                            .attr("r", 35)
+                            .attr("opacity", 0)
+                            .remove();
+                            
+                        // Impact Core Dot
+                        strikesLayer.append("circle")
+                            .attr("cx", to[0])
+                            .attr("cy", to[1])
+                            .attr("r", 2)
+                            .attr("fill", strike.color)
+                            .attr("opacity", 1)
+                            .transition()
+                            .duration(600)
+                            .attr("r", 8)
+                            .transition()
+                            .duration(2000)
+                            .attr("opacity", 0)
+                            .remove();
+                    });
+            });
+        }
+
+        function updateProgress() {
+            const pct = ((currentStep + 1) / events.length) * 100;
+            document.getElementById("progress-bar").style.width = pct + "%";
+        }
+
+        function nextStep() {
+            currentStep = (currentStep + 1) % events.length;
+            renderStep(currentStep);
+            updateProgress();
+            
+            // If manual interaction during play, reset the timer to prevent immediate skips
+            if (isPlaying) {
+                clearInterval(timer);
+                startTimer();
+            }
+        }
+
+        function prevStep() {
+            currentStep = (currentStep - 1 + events.length) % events.length;
+            
+            // When moving backwards manually, it's visually cleaner to rebuild up to current step
+            // For simplicity and immediate feedback, we wipe the board
+            strikesLayer.selectAll("*").remove();
+            
+            renderStep(currentStep);
+            updateProgress();
+
+            if (isPlaying) {
+                clearInterval(timer);
+                startTimer();
+            }
+        }
+
+        function startTimer() {
+            timer = setInterval(() => {
+                currentStep++;
+                if (currentStep >= events.length) {
+                    togglePlay(); // Auto-pause at the end of the timeline
+                    currentStep = events.length - 1; 
+                } else {
+                    renderStep(currentStep);
+                    updateProgress();
+                }
+            }, stepDuration);
+        }
+
+        function togglePlay() {
+            isPlaying = !isPlaying;
+            const playBtn = document.getElementById("play-icon");
+            const pauseBtn = document.getElementById("pause-icon");
+            
+            if (isPlaying) {
+                playBtn.classList.add("hidden");
+                pauseBtn.classList.remove("hidden");
+                
+                // If at the end, restart
+                if (currentStep === events.length - 1) {
+                    currentStep = 0;
+                    renderStep(currentStep);
+                    updateProgress();
+                }
+                
+                startTimer();
+            } else {
+                playBtn.classList.remove("hidden");
+                pauseBtn.classList.add("hidden");
+                clearInterval(timer);
+            }
+        }
+
+        // Handle window resize dynamically
+        window.addEventListener('resize', () => {
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+            svg.attr("width", w).attr("height", h);
+            // Re-centering isn't strictly necessary as the zoom behavior manages the transform,
+            // but user can pan as needed.
+        });
+
+    </script>
+</body>
+</html>
